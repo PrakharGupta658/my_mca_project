@@ -1,7 +1,8 @@
 // src/Dashboard.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { tokens } from "./styles/tokens";
 import { useOccupancyData } from "./hooks/useOccupancyData";
+import { fetchWeekly } from "./api/occupancyApi";
 
 import Kpi from "./widgets/Kpi";
 import Legend from "./widgets/Legend";
@@ -11,16 +12,6 @@ import UtilizationChart from "./widgets/UtilizationChart";
 import InsightCard from "./widgets/InsightCard";
 
 const SENSOR_ID = "2c:cf:67:ff:f5:f4";
-
-// Placeholder weekly rollup until a backend aggregation endpoint exists
-// (see UtilizationChart.jsx for the intended real source).
-const WEEKLY_PLACEHOLDER = [
-  { day: "Mon", rate: 52, peak: 78 },
-  { day: "Tue", rate: 61, peak: 84 },
-  { day: "Wed", rate: 67, peak: 92 },
-  { day: "Thu", rate: 58, peak: 81 },
-  { day: "Fri", rate: 41, peak: 66 },
-];
 
 const INSIGHTS = [
   {
@@ -40,6 +31,13 @@ const INSIGHTS = [
 export default function Dashboard() {
   const { snapshot, trend, error, loading } = useOccupancyData(SENSOR_ID, 5000);
   const [selected, setSelected] = useState(null);
+  const [weekly, setWeekly] = useState([]);
+
+  useEffect(() => {
+    fetchWeekly(SENSOR_ID, 7)
+      .then(setWeekly)
+      .catch((err) => console.error("Failed to load weekly data:", err));
+  }, []);
 
   const stats = useMemo(() => {
     if (!snapshot) return { occupied: 0, available: 0, rate: 0, total: 0 };
@@ -195,7 +193,7 @@ export default function Dashboard() {
           }}
         >
           <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16 }}>Weekly utilization vs. peak</div>
-          <UtilizationChart data={WEEKLY_PLACEHOLDER} />
+          <UtilizationChart data={weekly} />
         </div>
 
         <div

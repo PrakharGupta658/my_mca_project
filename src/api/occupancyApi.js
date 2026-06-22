@@ -1,75 +1,89 @@
-// src/api/occupancyApi.js
-//
-// Talks to the DeskTherm realtime occupancy endpoint.
-// Example: https://flask.claircoair.com/api/v1/desktherm-realtime?Sensor=2c:cf:67:ff:f5:f4
-//
-// Raw response shape:
-// {
-//   "data": {
-//     "COUNT": 3,
-//     "SEATS": { "Ground_Floor_Workstation_Seat_1": 0, ... },
-//     "SENSOR": "2c:cf:67:ff:f5:f4",
-//     "TIME": 1781864926,          // unix seconds
-//     "_id": "6a3519e56a43beb5554d8a9d"
-//   }
-// }
-// SEATS value: 0 = available, 1 = occupied (sensor only reports these two states)
-
-const BASE_URL = "https://flask.claircoair.com/api/v1/desktherm-realtime";
+const BASE_URL = "http://localhost:8080/api/occupancy";
 
 /**
- * Fetch the latest raw snapshot for a given sensor.
+ * Fetch the current snapshot for a given sensor.
  * @param {string} sensorId e.g. "2c:cf:67:ff:f5:f4"
  */
 export async function fetchRealtimeOccupancy(sensorId) {
-  const url = `${BASE_URL}?Sensor=${encodeURIComponent(sensorId)}`;
+  const url = `${BASE_URL}/live?sensorId=${encodeURIComponent(sensorId)}`;
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`Occupancy API request failed: ${res.status} ${res.statusText}`);
+    const body = await safeJson(res);
+    throw new Error(body?.error || `Occupancy API request failed: ${res.status} ${res.statusText}`);
   }
 
   const json = await res.json();
-  if (!json || !json.data) {
-    throw new Error("Occupancy API returned an unexpected payload");
-  }
-
-  return normalizeSnapshot(json.data);
+  return normalizeLive(json);
 }
 
 /**
- * Convert the raw SEATS map into an array of desk objects the UI can render,
- * plus a few derived aggregate numbers.
+ * Fetch the occupancy trend (rate over time) for the last N hours.
+ * @param {string} sensorId
+ * @param {number} hours
  */
-export function normalizeSnapshot(raw) {
-  const seatEntries = Object.entries(raw.SEATS || {});
+export async function fetchTrend(sensorId, hours = 24) {
+  const url = `${BASE_URL}/trend?sensorId=${encodeURIComponent(sensorId)}&hours=${hours}`;
+  const res = await fetch(url);
 
-  const desks = seatEntries.map(([key, value]) => ({
-    id: key,
-    label: prettifySeatName(key),
-    status: value === 1 ? "occupied" : "available",
+  if (!res.ok) {
+    const body = await safeJson(res);
+    throw new Error(body?.error || `Trend API request failed: ${res.status} ${res.statusText}`);
+  }
+
+  const points = await res.json();
+  return points.map((p) => ({
+    time: new Date(p.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    occupancy: p.occupancy,
+  }));
+}
+
+/**
+ * Fetch the weekly utilization rollup (avg + peak rate per day).
+ * @param {string} sensorId
+ * @param {number} days
+ */
+export async function fetchWeekly(sensorId, days = 7) {
+  const url = `${BASE_URL}/weekly?sensorId=${encodeURIComponent(sensorId)}&days=${days}`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    const body = await safeJson(res);
+    throw new Error(body?.error || `Weekly API request failed: ${res.status} ${res.statusText}`);
+  }
+
+  return res.json(); // [{ day, rate, peak }, ...]
+}
+
+/** Converts the backend's /live response into the shape the widgets expect. */
+function normalizeLive(raw) {
+  const desks = (raw.seats || []).map((s) => ({
+    id: s.seatId,
+    label: s.label || prettifySeatName(s.seatId),
+    status: s.status === 1 ? "occupied" : "available",
   }));
 
-  const occupied = desks.filter((d) => d.status === "occupied").length;
-  const available = desks.length - occupied;
-  const rate = desks.length ? Math.round((occupied / desks.length) * 100) : 0;
-
   return {
-    sensorId: raw.SENSOR,
-    recordId: raw._id,
-    timestamp: raw.TIME ? new Date(raw.TIME * 1000) : new Date(),
-    count: raw.COUNT ?? desks.length,
+    sensorId: raw.sensorId,
+    timestamp: raw.timestamp ? new Date(raw.timestamp) : new Date(),
     desks,
-    occupied,
-    available,
-    rate,
+    occupied: raw.occupied,
+    available: raw.available,
+    rate: raw.rate,
   };
 }
 
 function prettifySeatName(key) {
-  // "Ground_Floor_Workstation_Seat_1" -> "Ground Floor · Seat 1"
   const seatMatch = key.match(/Seat_(\d+)$/i);
   const seatNumber = seatMatch ? seatMatch[1] : null;
   const floor = key.replace(/_Workstation_Seat_\d+$/i, "").replace(/_/g, " ");
   return seatNumber ? `${floor} · Seat ${seatNumber}` : key.replace(/_/g, " ");
+}
+
+async function safeJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
