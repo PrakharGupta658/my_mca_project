@@ -1,3 +1,20 @@
+// src/api/occupancyApi.js
+//
+// Talks to YOUR Java backend now — not the sensor directly. The backend
+// (Main.java + OccupancyHandler) polls the sensor server-side, stores
+// history in Postgres, and exposes these three endpoints.
+//
+// Backend response shape for /live:
+// {
+//   "sensorId": "2c:cf:67:ff:f5:f4",
+//   "timestamp": "2026-06-20T10:15:30Z",
+//   "total": 4,
+//   "occupied": 3,
+//   "available": 1,
+//   "rate": 75,
+//   "seats": [{ "seatId": "Ground_Floor_Workstation_Seat_1", "status": 0, "label": "..." }, ...]
+// }
+
 const BASE_URL = "http://localhost:8080/api/occupancy";
 
 /**
@@ -39,12 +56,12 @@ export async function fetchTrend(sensorId, hours = 24) {
 }
 
 /**
- * Fetch the weekly utilization rollup (avg + peak rate per day).
+ * Fetch weekly utilization rollup (avg + peak rate per day).
  * @param {string} sensorId
- * @param {number} days
+ * @param {number} weekOffset  0 = current week, 1 = last week, 2 = two weeks ago …
  */
-export async function fetchWeekly(sensorId, days = 7) {
-  const url = `${BASE_URL}/weekly?sensorId=${encodeURIComponent(sensorId)}&days=${days}`;
+export async function fetchWeekly(sensorId, weekOffset = 0) {
+  const url = `${BASE_URL}/weekly?sensorId=${encodeURIComponent(sensorId)}&weekOffset=${weekOffset}`;
   const res = await fetch(url);
 
   if (!res.ok) {
@@ -52,7 +69,7 @@ export async function fetchWeekly(sensorId, days = 7) {
     throw new Error(body?.error || `Weekly API request failed: ${res.status} ${res.statusText}`);
   }
 
-  return res.json(); // [{ day, rate, peak }, ...]
+  return res.json(); // [{ day, date, rate, peak }, ...]
 }
 
 /** Converts the backend's /live response into the shape the widgets expect. */
@@ -83,7 +100,47 @@ function prettifySeatName(key) {
 async function safeJson(res) {
   try {
     return await res.json();
-  } catch {
+  } catch (e) {
     return null;
   }
+}
+
+/**
+ * Fetch per-desk occupancy timeline for today (since midnight IST).
+ * Returns { seats: string[], points: object[] }
+ * @param {string} sensorId
+ */
+export async function fetchDeskTrend(sensorId) {
+  const url = `${BASE_URL}/desk-trend?sensorId=${encodeURIComponent(sensorId)}`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    const body = await safeJson(res);
+    throw new Error(body?.error || `Desk trend API failed: ${res.status} ${res.statusText}`);
+  }
+
+  return res.json(); // { seats: [...], points: [...] }
+}
+
+// ── Prediction API ───────────────────────────────────────────────────────────
+
+/**
+ * Predict occupancy for a specific day + hour.
+ * dayOfWeek: 1=Mon … 7=Sun, hour: 0-23
+ */
+export async function fetchPrediction(sensorId, dayOfWeek, hour) {
+  const url = `${BASE_URL.replace('/occupancy', '')}/predict?sensorId=${encodeURIComponent(sensorId)}&dayOfWeek=${dayOfWeek}&hour=${hour}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Prediction failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Fetch hourly occupancy summary for a whole day (for the busy-hours chart).
+ */
+export async function fetchDaySummary(sensorId, dayOfWeek) {
+  const url = `${BASE_URL.replace('/occupancy', '')}/predict/summary?sensorId=${encodeURIComponent(sensorId)}&dayOfWeek=${dayOfWeek}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Day summary failed: ${res.status}`);
+  return res.json();
 }
